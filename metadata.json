@@ -1,0 +1,6 @@
+{
+  "name": "Money Multiplier Simulator",
+  "description": "An interactive visualization of how the banking system creates money through fractional reserve lending, showing step-by-step balance sheet changes for individual banks and the whole system.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
