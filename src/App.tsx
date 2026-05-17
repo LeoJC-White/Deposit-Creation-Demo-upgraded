@@ -20,7 +20,7 @@ import {
 import { BalanceSheet, BankState, SimulationStep } from './types';
 
 const INITIAL_DEPOSIT = 1000;
-const DEFAULT_RESERVE_RATIO = 0.1;
+const DEFAULT_RESERVE_RATIO = 0.9;
 
 // Mini Character Component
 const PixelCharacter = ({ direction = 1, isCarrying = false }: { direction?: number, isCarrying?: boolean }) => (
@@ -42,6 +42,7 @@ const PixelCharacter = ({ direction = 1, isCarrying = false }: { direction?: num
           initial={{ scale: 0 }}
           animate={{ scale: 1 }}
           className="absolute -top-4 -right-2 bg-emerald-400 border border-slate-900 p-0.5"
+          style={{ backgroundColor: direction === -100 ? '#ef4444' : '#34d399' }} // Visual hint for negative flow? No, direction is just 1 or -1.
         >
           <Coins className="w-3 h-3 text-emerald-900" />
         </motion.div>
@@ -63,14 +64,18 @@ const PixelCharacter = ({ direction = 1, isCarrying = false }: { direction?: num
   </motion.div>
 );
 
-const MoneyFlowAnimation = ({ currentStep }: { currentStep: SimulationStep }) => {
+const MoneyFlowAnimation = ({ currentStep, mode }: { currentStep: SimulationStep; mode: 'EXPANSION' | 'CONTRACTION' }) => {
   const [pathData, setPathData] = useState<string | null>(null);
   const [points, setPoints] = useState<{ x1: number, y1: number, x2: number, y2: number } | null>(null);
+  const [isReverse, setIsReverse] = useState(false);
+  const isContractionRepayment = !!(mode === 'CONTRACTION' && currentStep.actionType === 'DEPOSIT' && currentStep.highlightedBankId);
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const updatePath = () => {
-      if (currentStep.actionType === 'DEPOSIT' && currentStep.highlightedBankId && currentStep.highlightedBankId > 1) {
+      // For DEPOSIT (Expansion)
+      if (mode === 'EXPANSION' && currentStep.actionType === 'DEPOSIT' && currentStep.highlightedBankId && currentStep.highlightedBankId > 1) {
+        setIsReverse(false);
         const prevBankId = currentStep.highlightedBankId - 1;
         const nextBankId = currentStep.highlightedBankId;
         
@@ -94,73 +99,114 @@ const MoneyFlowAnimation = ({ currentStep }: { currentStep: SimulationStep }) =>
 
           setPoints({ x1, y1, x2, y2 });
 
-          // Determine the path that hugs the edges
           const scBottom = scRect.bottom - cRect.top;
           const tcBottom = tcRect.bottom - cRect.top;
-          const margin = 20; // Distance from the card edge
+          const margin = 20;
           const lowY = Math.max(scBottom, tcBottom) + margin;
-
-          // Corner radius for the path
           const r = 20;
 
-          // Path: Exit down, turn, move across, turn, enter up
-          const d = `
-            M ${x1} ${y1} 
-            L ${x1} ${lowY - r} 
-            Q ${x1} ${lowY}, ${x1 + (x2 > x1 ? r : -r)} ${lowY} 
-            L ${x2 - (x2 > x1 ? r : -r)} ${lowY} 
-            Q ${x2} ${lowY}, ${x2} ${lowY - r} 
-            L ${x2} ${y2}
-          `.replace(/\s+/g, ' ').trim();
-          
+          const d = `M ${x1} ${y1} L ${x1} ${lowY - r} Q ${x1} ${lowY}, ${x1 + (x2 > x1 ? r : -r)} ${lowY} L ${x2 - (x2 > x1 ? r : -r)} ${lowY} Q ${x2} ${lowY}, ${x2} ${lowY - r} L ${x2} ${y2}`;
           setPathData(d);
         }
-      } else {
+      } 
+      // For REPAYMENT (Contraction) - Money moving from Bank n+1 deposits BACK to Bank n loans
+      else if (isContractionRepayment) {
+        setIsReverse(true);
+        const targetBankId = currentStep.highlightedBankId!;
+        const sourceBankId = targetBankId + 1;
+        
+        const sourceEl = document.getElementById(`bank-${sourceBankId}-deposits`);
+        const targetEl = document.getElementById(`bank-${targetBankId}-loans`);
+        
+        const sourceCard = document.getElementById(`bank-card-${sourceBankId}`);
+        const targetCard = document.getElementById(`bank-card-${targetBankId}`);
+        
+        if (sourceEl && targetEl && sourceCard && targetCard && containerRef.current) {
+          const sRect = sourceEl.getBoundingClientRect();
+          const tRect = targetEl.getBoundingClientRect();
+          const scRect = sourceCard.getBoundingClientRect();
+          const tcRect = targetCard.getBoundingClientRect();
+          const cRect = containerRef.current.getBoundingClientRect();
+          
+          // FOR CONTRACTION: Path starts at Source (Bank n+1) and ends at Target (Bank n)
+          // This way markerEnd points to the target bank (Bank n)
+          const x1 = sRect.left + sRect.width / 2 - cRect.left;
+          const y1 = sRect.bottom - cRect.top + 5;
+          const x2 = tRect.left + tRect.width / 2 - cRect.left;
+          const y2 = tRect.bottom - cRect.top + 5;
+
+          setPoints({ x1, y1, x2, y2 });
+
+          const scBottom = scRect.bottom - cRect.top;
+          const tcBottom = tcRect.bottom - cRect.top;
+          const margin = 20;
+          const lowY = Math.max(scBottom, tcBottom) + margin;
+          const r = 20;
+
+          // Universal path logic that handles both directions
+          const d = `M ${x1} ${y1} L ${x1} ${lowY - r} Q ${x1} ${lowY}, ${x1 + (x2 > x1 ? r : -r)} ${lowY} L ${x2 - (x2 > x1 ? r : -r)} ${lowY} Q ${x2} ${lowY}, ${x2} ${lowY - r} L ${x2} ${y2}`;
+          setPathData(d);
+        }
+      }
+      else {
         setPathData(null);
         setPoints(null);
       }
     };
 
-    const timer = setTimeout(updatePath, 200); // Wait for Card mounting & transition
+    const timer = setTimeout(updatePath, 200);
     window.addEventListener('resize', updatePath);
     return () => {
       clearTimeout(timer);
       window.removeEventListener('resize', updatePath);
     };
-  }, [currentStep]);
+  }, [currentStep, isContractionRepayment]);
 
   return (
     <div ref={containerRef} className="absolute inset-0 pointer-events-none z-50">
       <AnimatePresence mode="wait">
         {pathData && points ? (
           <motion.div
-            key={`deposit-anim-${currentStep.stepIndex}`}
+            key={`flow-anim-${currentStep.stepIndex}-${mode}`}
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
           >
-            {/* High Road Path */}
             <svg className="absolute inset-0 w-full h-full overflow-visible">
               <defs>
                 <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
-                  <polygon points="0 0, 10 3.5, 0 7" fill="#10B981" />
+                  <polygon points="0 0, 10 3.5, 0 7" fill={isReverse ? "#ef4444" : "#10B981"} />
                 </marker>
               </defs>
               <motion.path
                 id="money-path-line"
                 d={pathData}
                 fill="transparent"
-                stroke="#10B981"
+                stroke={isReverse ? "#ef4444" : "#10B981"}
                 strokeWidth="3"
                 strokeDasharray="10,10"
-                initial={{ pathLength: 0 }}
-                animate={{ pathLength: 1 }}
-                transition={{ duration: 1.5, ease: "easeInOut" }}
+                initial={{ pathLength: 0, opacity: isContractionRepayment ? 0 : 1 }}
+                animate={isContractionRepayment ? { 
+                  pathLength: [0, 0, 1, 1],
+                  opacity: [0, 0, 1, 1]
+                } : { 
+                  pathLength: 1,
+                  opacity: 1
+                }}
+                transition={isContractionRepayment ? { 
+                  duration: 5, 
+                  times: [0, 0.4, 0.6, 1], 
+                  ease: "easeInOut",
+                  repeat: Infinity,
+                  repeatDelay: 1
+                } : { 
+                  duration: 1.5, 
+                  ease: "easeInOut" 
+                }}
                 markerEnd="url(#arrowhead)"
               />
             </svg>
 
-            {/* Character moving along the line */}
             <motion.div
               style={{ 
                 position: 'absolute', 
@@ -169,27 +215,46 @@ const MoneyFlowAnimation = ({ currentStep }: { currentStep: SimulationStep }) =>
                 offsetPath: `path("${pathData}")`,
                 offsetRotate: '0deg'
               }}
-              animate={{ 
+              animate={isContractionRepayment ? { 
+                offsetDistance: ["100%", "0%", "0%", "100%"]
+              } : { 
                 offsetDistance: ["0%", "100%"] 
               }}
-              transition={{ duration: 3, ease: "easeInOut", repeat: Infinity, repeatDelay: 0.5 }}
+              transition={isContractionRepayment ? { 
+                duration: 5, 
+                times: [0, 0.4, 0.6, 1], 
+                ease: "easeInOut", 
+                repeat: Infinity, 
+                repeatDelay: 1 
+              } : { 
+                duration: 3, 
+                ease: "easeInOut", 
+                repeat: Infinity, 
+                repeatDelay: 0.5 
+              }}
             >
               <div className="-translate-x-1/2 -translate-y-[120%]">
-                <PixelCharacter 
-                  direction={points.x2 > points.x1 ? 1 : -1} 
-                  isCarrying={true} 
+                <ContractionPixelCharacter 
+                  isContractionRepayment={isContractionRepayment}
+                  isForwardPath={points.x2 > points.x1}
                 />
               </div>
             </motion.div>
           </motion.div>
-        ) : currentStep.actionType === 'LOAN' && currentStep.highlightedBankId ? (
+
+        ) : (currentStep.actionType === 'LOAN' || currentStep.actionType === 'REPAYMENT' || currentStep.actionType === 'WITHDRAWAL') && currentStep.highlightedBankId ? (
           <motion.div
-            key={`loan-anim-${currentStep.stepIndex}`}
+            key={`effect-anim-${currentStep.stepIndex}`}
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
           >
-            <BankLoanEffect bankId={currentStep.highlightedBankId} containerRef={containerRef} />
+            <BankLoanEffect 
+              bankId={currentStep.highlightedBankId} 
+              containerRef={containerRef} 
+              isWithdrawal={currentStep.actionType === 'WITHDRAWAL'} 
+              isRepayment={currentStep.actionType === 'REPAYMENT'}
+            />
           </motion.div>
         ) : null}
       </AnimatePresence>
@@ -197,12 +262,59 @@ const MoneyFlowAnimation = ({ currentStep }: { currentStep: SimulationStep }) =>
   );
 };
 
-const BankLoanEffect = ({ bankId, containerRef }: { bankId: number, containerRef: React.RefObject<HTMLDivElement> }) => {
+// Sub-component for contraction character to handle visual direction flips in sequence
+const ContractionPixelCharacter = ({ isContractionRepayment, isForwardPath }: { isContractionRepayment: boolean, isForwardPath: boolean }) => {
+  const [direction, setDirection] = useState(1);
+  const [isCarrying, setIsCarrying] = useState(true);
+
+  useEffect(() => {
+    if (!isContractionRepayment) {
+      // Default behavior for expansion: facing the direction of path movement
+      setDirection(isForwardPath ? 1 : -1);
+      setIsCarrying(true);
+      return;
+    }
+
+    // Sequence for contraction repayment:
+    // Path is defined as Bank n+1 -> Bank n (Right to Left usually, so isForwardPath is false)
+    // Borrower starts at Bank n (100% offset)
+    // 0-40%: Move 100% -> 0% (n -> n+1). Facing RIGHT if n+1 is on the right.
+    // 40-60%: Wait at 0% (n+1)
+    // 60-100%: Move 0% -> 100% (n+1 -> n). Facing LEFT if n+1 is on the right.
+    
+    let stage = 0;
+    const interval = setInterval(() => {
+      stage = (stage + 1) % 50; // Each 100ms = 2% of 5s
+      
+      const nIsOnLeft = !isForwardPath; // Usually Bank n is left of n+1
+      
+      if (stage < 20) { // 0-40% (n -> n+1)
+        setDirection(nIsOnLeft ? 1 : -1); 
+        setIsCarrying(false);
+      } else if (stage < 30) { // 40-60% wait
+        setDirection(nIsOnLeft ? 1 : -1);
+        setIsCarrying(true);
+      } else { // 60-100% (n+1 -> n)
+        setDirection(nIsOnLeft ? -1 : 1);
+        setIsCarrying(true);
+      }
+    }, 100);
+
+    return () => clearInterval(interval);
+  }, [isContractionRepayment, isForwardPath]);
+
+  return <PixelCharacter direction={direction} isCarrying={isCarrying} />;
+};
+
+
+
+const BankLoanEffect = ({ bankId, containerRef, isWithdrawal, isRepayment }: { bankId: number, containerRef: React.RefObject<HTMLDivElement>, isWithdrawal?: boolean, isRepayment?: boolean }) => {
   const [pos, setPos] = useState({ x: 0, y: 0 });
 
   useEffect(() => {
     const update = () => {
-      const el = document.getElementById(`bank-${bankId}-loans`);
+      const elId = isWithdrawal ? `bank-${bankId}-deposits` : `bank-${bankId}-loans`;
+      const el = document.getElementById(elId);
       if (el && containerRef.current) {
         const rect = el.getBoundingClientRect();
         const cRect = containerRef.current.getBoundingClientRect();
@@ -215,14 +327,14 @@ const BankLoanEffect = ({ bankId, containerRef }: { bankId: number, containerRef
     update();
     window.addEventListener('resize', update);
     return () => window.removeEventListener('resize', update);
-  }, [bankId, containerRef]);
+  }, [bankId, containerRef, isWithdrawal]);
 
   if (pos.x === 0) return null;
 
   return (
     <motion.div
       style={{ position: 'absolute', x: pos.x - 12, y: pos.y - 40 }}
-      animate={{ y: [pos.y - 40, pos.y - 60, pos.y - 40] }}
+      animate={{ y: isRepayment ? [pos.y - 60, pos.y - 40, pos.y - 60] : [pos.y - 40, pos.y - 60, pos.y - 40] }}
       transition={{ duration: 2, repeat: Infinity }}
     >
       <div className="flex flex-col items-center">
@@ -231,10 +343,23 @@ const BankLoanEffect = ({ bankId, containerRef }: { bankId: number, containerRef
           transition={{ duration: 1.5, repeat: Infinity }}
           className="mb-2"
         >
-          <Coins className="w-6 h-6 text-emerald-400 drop-shadow-[0_0_5px_rgba(52,211,153,0.8)]" />
+          <Coins className={`w-6 h-6 ${isWithdrawal ? 'text-red-400' : 'text-emerald-400'} drop-shadow-[0_0_5px_rgba(52,211,153,0.8)]`} />
         </motion.div>
-        <PixelCharacter isCarrying={false} />
-        <span className="text-[8px] font-black uppercase text-emerald-400 mt-1 bg-slate-900 border border-emerald-900/50 px-2 py-0.5 rounded-full shadow-lg">Borrower Action</span>
+        <PixelCharacter isCarrying={false} direction={isRepayment ? -1 : 1} />
+        <span className={`text-[8px] font-black uppercase mt-1 bg-slate-900 border px-2 py-0.5 rounded-full shadow-lg ${
+          isWithdrawal ? 'text-red-400 border-red-400' : isRepayment ? 'text-orange-400 border-orange-400' : 'text-emerald-400 border-emerald-900/50'
+        }`}>
+          {isWithdrawal ? 'Withdrawal' : isRepayment ? 'CALL BACK NOTICE' : 'Borrower Action'}
+        </span>
+        {isRepayment && (
+          <motion.div 
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="mt-2 bg-orange-500 text-white text-[7px] font-black px-2 py-1 rounded shadow-xl whitespace-nowrap"
+          >
+            LOAN REPAYMENT REQUESTED
+          </motion.div>
+        )}
       </div>
     </motion.div>
   );
@@ -243,118 +368,227 @@ const BankLoanEffect = ({ bankId, containerRef }: { bankId: number, containerRef
 export default function App() {
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
   const [reserveRatio, setReserveRatio] = useState(DEFAULT_RESERVE_RATIO);
-  const [showConfig, setShowConfig] = useState(false);
+  const [mode, setMode] = useState<'EXPANSION' | 'CONTRACTION'>('EXPANSION');
 
-  // Generate steps based on reserve ratio
+  // Helper for deep cloning bank states to avoid reference sharing between steps
+  const cloneBanks = (banks: BankState[]): BankState[] => 
+    banks.map(b => ({
+      ...b,
+      balanceSheet: {
+        assets: { ...b.balanceSheet.assets },
+        liabilities: { ...b.balanceSheet.liabilities }
+      }
+    }));
+
+  // Generate steps based on mode and reserve ratio
   const steps = useMemo(() => {
     const generatedSteps: SimulationStep[] = [];
     let currentBanks: BankState[] = [];
     
-    // Helper for deep cloning bank states to avoid reference sharing between steps
-    const cloneBanks = (banks: BankState[]): BankState[] => 
-      banks.map(b => ({
-        ...b,
-        balanceSheet: {
-          assets: { ...b.balanceSheet.assets },
-          liabilities: { ...b.balanceSheet.liabilities }
-        }
-      }));
-
-    // Step 0: Initial Stage (Before anything happens)
-    generatedSteps.push({
-      stepIndex: 0,
-      description: "Initial State: The banking system has no activity.",
-      banks: [],
-      systemAggregate: { assets: { reserves: 0, loans: 0 }, liabilities: { deposits: 0 } },
-      actionType: 'INITIAL'
-    });
-
-    // Step 1: Initial Deposit into Bank 1
-    currentBanks = [{
-      id: 1,
-      name: "Bank 1",
-      balanceSheet: {
-        assets: { reserves: INITIAL_DEPOSIT, loans: 0 },
-        liabilities: { deposits: INITIAL_DEPOSIT }
-      }
-    }];
-    generatedSteps.push({
-      stepIndex: 1,
-      description: `Individual deposits $${INITIAL_DEPOSIT} of cash into Bank 1. At this initial moment, Bank 1 holds the full amount as reserves and has issued no loans.`,
-      banks: cloneBanks(currentBanks),
-      systemAggregate: { 
-        assets: { reserves: INITIAL_DEPOSIT, loans: 0 }, 
-        liabilities: { deposits: INITIAL_DEPOSIT } 
-      },
-      actionType: 'DEPOSIT',
-      highlightedBankId: 1
-    });
-
-    let lastDepositAmount = INITIAL_DEPOSIT;
-    let bankCount = 1;
-
-    // Increased to 8 iterations to show more banks
-    for (let i = 0; i < 8; i++) {
-      const currentBankIndex = currentBanks.length - 1;
-      const loanAmount = lastDepositAmount * (1 - reserveRatio);
-      const keptReserves = lastDepositAmount * reserveRatio;
-
-      if (loanAmount < 0.1) break;
-
-      // Step: Loan is issued by current bank
-      currentBanks[currentBankIndex].balanceSheet.assets.reserves = keptReserves;
-      currentBanks[currentBankIndex].balanceSheet.assets.loans += loanAmount;
-      
-      const totalReserves = currentBanks.reduce((sum, b) => sum + b.balanceSheet.assets.reserves, 0);
-      const totalLoans = currentBanks.reduce((sum, b) => sum + b.balanceSheet.assets.loans, 0);
-      const totalDeposits = currentBanks.reduce((sum, b) => sum + b.balanceSheet.liabilities.deposits, 0);
-
+    if (mode === 'EXPANSION') {
+      // Step 0: Initial Stage
       generatedSteps.push({
-        stepIndex: generatedSteps.length,
-        description: `${currentBanks[currentBankIndex].name} retains $${keptReserves.toFixed(2)} (${(reserveRatio * 100).toFixed(0)}%) as required reserves and lends out the excess $${loanAmount.toFixed(2)} to a borrower.`,
-        banks: cloneBanks(currentBanks),
-        systemAggregate: {
-          assets: { reserves: totalReserves, loans: totalLoans },
-          liabilities: { deposits: totalDeposits }
-        },
-        actionType: 'LOAN',
-        highlightedBankId: currentBanks[currentBankIndex].id
+        stepIndex: 0,
+        description: "Initial State: The banking system has no activity.",
+        banks: [],
+        systemAggregate: { assets: { reserves: 0, loans: 0 }, liabilities: { deposits: 0 } },
+        actionType: 'INITIAL'
       });
 
-      // Step: Loan is deposited into next bank
-      bankCount++;
-      const nextBankName = `Bank ${bankCount}`;
-      const nextBank: BankState = {
-        id: bankCount,
-        name: nextBankName,
+      // Step 1: Initial Deposit into Bank 1
+      currentBanks = [{
+        id: 1,
+        name: "Bank 1",
         balanceSheet: {
-          assets: { reserves: loanAmount, loans: 0 },
-          liabilities: { deposits: loanAmount }
+          assets: { reserves: INITIAL_DEPOSIT, loans: 0 },
+          liabilities: { deposits: INITIAL_DEPOSIT }
         }
-      };
-      
-      currentBanks.push(nextBank);
-      lastDepositAmount = loanAmount;
-
-      const totalReservesAfter = currentBanks.reduce((sum, b) => sum + b.balanceSheet.assets.reserves, 0);
-      const totalLoansAfter = currentBanks.reduce((sum, b) => sum + b.balanceSheet.assets.loans, 0);
-      const totalDepositsAfter = currentBanks.reduce((sum, b) => sum + b.balanceSheet.liabilities.deposits, 0);
-
+      }];
       generatedSteps.push({
-        stepIndex: generatedSteps.length,
-        description: `The $${loanAmount.toFixed(2)} loan is spent and redeposited into ${nextBankName}. Total deposits in the system increase, creating new money.`,
+        stepIndex: 1,
+        description: `Individual deposits $${INITIAL_DEPOSIT} of cash into Bank 1. At this initial moment, Bank 1 holds the full amount as reserves and has issued no loans.`,
         banks: cloneBanks(currentBanks),
-        systemAggregate: {
-          assets: { reserves: totalReservesAfter, loans: totalLoansAfter },
-          liabilities: { deposits: totalDepositsAfter }
+        systemAggregate: { 
+          assets: { reserves: INITIAL_DEPOSIT, loans: 0 }, 
+          liabilities: { deposits: INITIAL_DEPOSIT } 
         },
         actionType: 'DEPOSIT',
-        highlightedBankId: bankCount
+        highlightedBankId: 1
       });
+
+      let lastDepositAmount = INITIAL_DEPOSIT;
+      let bankCount = 1;
+
+      for (let i = 0; i < 8; i++) {
+        const currentBankIndex = currentBanks.length - 1;
+        const loanAmount = lastDepositAmount * (1 - reserveRatio);
+        const keptReserves = lastDepositAmount * reserveRatio;
+
+        if (loanAmount < 0.1) break;
+
+        currentBanks[currentBankIndex].balanceSheet.assets.reserves = keptReserves;
+        currentBanks[currentBankIndex].balanceSheet.assets.loans += loanAmount;
+        
+        const totalReserves = currentBanks.reduce((sum, b) => sum + b.balanceSheet.assets.reserves, 0);
+        const totalLoans = currentBanks.reduce((sum, b) => sum + b.balanceSheet.assets.loans, 0);
+        const totalDeposits = currentBanks.reduce((sum, b) => sum + b.balanceSheet.liabilities.deposits, 0);
+
+        generatedSteps.push({
+          stepIndex: generatedSteps.length,
+          description: `${currentBanks[currentBankIndex].name} retains $${keptReserves.toFixed(2)} (${(reserveRatio * 100).toFixed(0)}%) as required reserves and lends out the excess $${loanAmount.toFixed(2)} to a borrower.`,
+          banks: cloneBanks(currentBanks),
+          systemAggregate: {
+            assets: { reserves: totalReserves, loans: totalLoans },
+            liabilities: { deposits: totalDeposits }
+          },
+          actionType: 'LOAN',
+          highlightedBankId: currentBanks[currentBankIndex].id
+        });
+
+        bankCount++;
+        const nextBankName = `Bank ${bankCount}`;
+        const nextBank: BankState = {
+          id: bankCount,
+          name: nextBankName,
+          balanceSheet: {
+            assets: { reserves: loanAmount, loans: 0 },
+            liabilities: { deposits: loanAmount }
+          }
+        };
+        
+        currentBanks.push(nextBank);
+        lastDepositAmount = loanAmount;
+
+        const totalReservesAfter = currentBanks.reduce((sum, b) => sum + b.balanceSheet.assets.reserves, 0);
+        const totalLoansAfter = currentBanks.reduce((sum, b) => sum + b.balanceSheet.assets.loans, 0);
+        const totalDepositsAfter = currentBanks.reduce((sum, b) => sum + b.balanceSheet.liabilities.deposits, 0);
+
+        generatedSteps.push({
+          stepIndex: generatedSteps.length,
+          description: `The $${loanAmount.toFixed(2)} loan is spent and redeposited into ${nextBankName}. Total deposits in the system increase, creating new money.`,
+          banks: cloneBanks(currentBanks),
+          systemAggregate: {
+            assets: { reserves: totalReservesAfter, loans: totalLoansAfter },
+            liabilities: { deposits: totalDepositsAfter }
+          },
+          actionType: 'DEPOSIT',
+          highlightedBankId: bankCount
+        });
+      }
+    } else {
+      // CONTRACTION MODE
+      // 1. Build the "Full" state first
+      let fullBanks: BankState[] = [];
+      let lastDep = INITIAL_DEPOSIT;
+      for(let i=1; i<=8; i++) {
+        const loanAmt = lastDep * (1 - reserveRatio);
+        const resAmt = lastDep * reserveRatio;
+        fullBanks.push({
+          id: i,
+          name: `Bank ${i}`,
+          balanceSheet: {
+            assets: { reserves: resAmt, loans: loanAmt },
+            liabilities: { deposits: lastDep }
+          }
+        });
+        lastDep = loanAmt;
+        if (lastDep < 0.1) break;
+      }
+
+      currentBanks = cloneBanks(fullBanks);
+      
+      const calcAgg = (banks: BankState[]) => ({
+        assets: {
+          reserves: banks.reduce((s, b) => s + b.balanceSheet.assets.reserves, 0),
+          loans: banks.reduce((s, b) => s + b.balanceSheet.assets.loans, 0)
+        },
+        liabilities: {
+          deposits: banks.reduce((s, b) => s + b.balanceSheet.liabilities.deposits, 0)
+        }
+      });
+
+      // Step 0: Full State
+      generatedSteps.push({
+        stepIndex: 0,
+        description: "Initial State (Full Capacity): The banking system is fully loaned out based on the reserve requirement.",
+        banks: cloneBanks(currentBanks),
+        systemAggregate: calcAgg(currentBanks),
+        actionType: 'INITIAL'
+      });
+
+      // Step 1: Big Withdrawal from Bank 1
+      const withdrawalAmount = 100; // Updated from $500 to $100 as per user request
+      currentBanks[0].balanceSheet.liabilities.deposits -= withdrawalAmount;
+      currentBanks[0].balanceSheet.assets.reserves -= withdrawalAmount;
+
+      generatedSteps.push({
+        stepIndex: 1,
+        description: `A depositor withdraws $${withdrawalAmount.toFixed(2)} from Bank 1. This reduces both the bank's deposits and its actual reserves.`,
+        banks: cloneBanks(currentBanks),
+        systemAggregate: calcAgg(currentBanks),
+        actionType: 'WITHDRAWAL',
+        highlightedBankId: 1
+      });
+
+      // Iterative contraction
+      for (let i = 0; i < currentBanks.length; i++) {
+        const bank = currentBanks[i];
+        const requiredReserves = bank.balanceSheet.liabilities.deposits * reserveRatio;
+        const reservesShortfall = requiredReserves - bank.balanceSheet.assets.reserves;
+
+        if (reservesShortfall > 0.01 && bank.balanceSheet.assets.loans > 0) {
+          const calledLoans = Math.min(reservesShortfall, bank.balanceSheet.assets.loans);
+          
+          // Step 1: Bank asks for repayment (Notice of loan call back)
+          // Loans issued in bank n remain unchanged at this EXACT step
+          generatedSteps.push({
+            stepIndex: generatedSteps.length,
+            description: `NOTICE OF CALL BACK: ${bank.name} is below its required reserve ratio. It has formally issued a call-back notice for $${calledLoans.toFixed(2)} in loans to recover its liquidity.`,
+            banks: cloneBanks(currentBanks),
+            systemAggregate: calcAgg(currentBanks),
+            actionType: 'REPAYMENT',
+            highlightedBankId: bank.id
+          });
+
+          // Step 2: The actual repayment (The borrower runs back from Bank n+1 to Bank n)
+          if (i + 1 < currentBanks.length) {
+            const nextBank = currentBanks[i+1];
+            const reduction = Math.min(calledLoans, nextBank.balanceSheet.liabilities.deposits);
+            
+            // Update the state for THIS step
+            nextBank.balanceSheet.liabilities.deposits -= reduction;
+            nextBank.balanceSheet.assets.reserves -= reduction;
+            bank.balanceSheet.assets.loans -= reduction;
+            bank.balanceSheet.assets.reserves += reduction;
+
+            generatedSteps.push({
+              stepIndex: generatedSteps.length,
+              description: `REPAYMENT: The borrower withdraws $${reduction.toFixed(2)} from ${nextBank.name} and repays the debt to ${bank.name}. This removes ${reduction.toFixed(2)} from the money supply.`,
+              banks: cloneBanks(currentBanks),
+              systemAggregate: calcAgg(currentBanks),
+              actionType: 'DEPOSIT', // Using DEPOSIT type to trigger the "Between Banks" animation tool
+              highlightedBankId: bank.id // We'll logic this in the animation component
+            });
+          } else {
+            // End of domestic chain - simply repay from "outside"
+            bank.balanceSheet.assets.loans -= calledLoans;
+            bank.balanceSheet.assets.reserves += calledLoans;
+            
+            generatedSteps.push({
+              stepIndex: generatedSteps.length,
+              description: `The borrower repays the $${calledLoans.toFixed(2)} loan using outside cash, restoring ${bank.name}'s reserves.`,
+              banks: cloneBanks(currentBanks),
+              systemAggregate: calcAgg(currentBanks),
+              actionType: 'REPAYMENT',
+              highlightedBankId: bank.id
+            });
+          }
+        }
+      }
     }
 
     return generatedSteps;
-  }, [reserveRatio]);
+  }, [reserveRatio, mode]);
 
   const currentStep = steps[currentStepIndex];
   const moneyMultiplier = 1 / reserveRatio;
@@ -384,9 +618,25 @@ export default function App() {
           <h1 className="text-4xl md:text-6xl font-black uppercase tracking-tighter leading-none mb-2">
             The Money <span className="text-emerald-400">Multiplier</span>
           </h1>
-          <p className="text-slate-400 font-mono text-sm uppercase tracking-widest">
-            Deposit Creation Mechanism & Bank Balance Sheets
-          </p>
+          <div className="flex items-center gap-4">
+            <p className="text-slate-400 font-mono text-sm uppercase tracking-widest">
+              Deposit {mode === 'EXPANSION' ? 'Creation' : 'Contraction'} Mechanism
+            </p>
+            <div className="h-4 w-[2px] bg-slate-700" />
+            <button 
+              onClick={() => {
+                setMode(mode === 'EXPANSION' ? 'CONTRACTION' : 'EXPANSION');
+                setCurrentStepIndex(0);
+              }}
+              className={`text-[10px] font-black px-3 py-1 rounded-full uppercase tracking-widest transition-all ${
+                mode === 'EXPANSION' 
+                ? 'bg-emerald-500 text-slate-900 shadow-[0_0_15px_rgba(16,185,129,0.3)]' 
+                : 'bg-red-500 text-white shadow-[0_0_15px_rgba(239,68,68,0.3)]'
+              }`}
+            >
+              Switch to {mode === 'EXPANSION' ? 'Contraction' : 'Creation'}
+            </button>
+          </div>
         </div>
         
         <div className="text-left md:text-right relative">
@@ -397,7 +647,9 @@ export default function App() {
             <p className="text-xs font-bold text-emerald-400 uppercase">Current Phase</p>
             <p className="text-2xl font-bold uppercase tracking-tight">
               {currentStep.actionType === 'INITIAL' ? 'Setup' : 
-               currentStep.actionType === 'DEPOSIT' ? 'Deposit Stage' : 'Loan Issuance'}
+               currentStep.actionType === 'DEPOSIT' ? 'Deposit Stage' : 
+               currentStep.actionType === 'LOAN' ? 'Loan Issuance' :
+               currentStep.actionType === 'WITHDRAWAL' ? 'Withdrawal' : 'Loan Repayment'}
             </p>
           </div>
         </div>
@@ -433,7 +685,7 @@ export default function App() {
 
       {/* Main Visualization Area */}
       <main className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-8 relative z-10">
-        <MoneyFlowAnimation currentStep={currentStep} />
+        <MoneyFlowAnimation currentStep={currentStep} mode={mode} />
         
         {/* Left: Individual Banks */}
         <section className="lg:col-span-8 flex flex-col gap-6">
@@ -473,8 +725,28 @@ export default function App() {
         {/* Right: Aggregate System */}
         <section className="lg:col-span-4 flex flex-col gap-6">
           <div className="bg-slate-100 text-slate-900 rounded-2xl p-8 flex flex-col h-full shadow-2xl sticky top-8">
-            <h2 className="text-2xl font-black uppercase mb-8 border-b-4 border-slate-900 pb-2 tracking-tighter">System Aggregate</h2>
+            <h2 className="text-2xl font-black uppercase mb-6 border-b-4 border-slate-900 pb-2 tracking-tighter">System Aggregate</h2>
             
+            {/* Top Controls */}
+            <div className="grid grid-cols-2 gap-4 mb-8">
+              <button 
+                onClick={prevStep}
+                disabled={currentStepIndex === 0}
+                className="flex items-center justify-center gap-2 bg-slate-200 hover:bg-slate-300 disabled:opacity-50 py-3 rounded-xl transition-all group border-b-4 border-slate-400 active:border-b-0 active:translate-y-1"
+              >
+                <ArrowLeft className="w-4 h-4" />
+                <span className="font-black text-[10px] uppercase">Back</span>
+              </button>
+              <button 
+                onClick={nextStep}
+                disabled={currentStepIndex === steps.length - 1}
+                className="flex items-center justify-center gap-2 bg-slate-900 text-white hover:bg-black disabled:opacity-50 py-3 rounded-xl transition-all group border-b-4 border-black active:border-b-0 active:translate-y-1"
+              >
+                <span className="font-black text-[10px] uppercase">Next Step</span>
+                <ArrowRight className="w-4 h-4" />
+              </button>
+            </div>
+
             <div className="space-y-10 flex-1">
               <div>
                 <p className="text-[10px] font-black uppercase text-slate-500 tracking-widest mb-1">Total Deposits (M1 Money)</p>

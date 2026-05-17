@@ -8,14 +8,6 @@ This contains everything you need to run your app locally.
 
 View your app in AI Studio: https://ai.studio/apps/205c7008-c42e-4067-a75a-bbda585bb8be
 
-## quick access
-
-click [here](https://deposit-creation-demo-upgraded.w-leo-c2112.workers.dev/) to access the app (Cloudflare version).
-
-or scan the following QR Code:
-
-![App QR Code](./qrcode_deposit-creation-demo-upgraded.w-leo-c2112.workers.dev.png)
-
 ## Run Locally
 
 **Prerequisites:**  Node.js

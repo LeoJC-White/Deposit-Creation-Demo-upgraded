@@ -24,6 +24,6 @@ export interface SimulationStep {
   description: string;
   banks: BankState[];
   systemAggregate: BalanceSheet;
-  actionType: 'DEPOSIT' | 'LOAN' | 'INITIAL';
+  actionType: 'DEPOSIT' | 'LOAN' | 'INITIAL' | 'WITHDRAWAL' | 'REPAYMENT';
   highlightedBankId?: number;
 }
